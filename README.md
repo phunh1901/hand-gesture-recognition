@@ -8,7 +8,7 @@ Dự án sử dụng MediaPipe để trích xuất tọa độ tay và mô hình
 2. **Xử lý đặc trưng:** Chạy `extract_landmarks.py` để chuyển ảnh thành tọa độ 63 điểm (x, y, z).
 3. **Phân tích & Tăng cường:** Sử dụng `eda_and_augmentation.ipynb` để làm giàu dữ liệu.
 4. **Huấn luyện:** Chạy `model_training.ipynb` để tạo ra file `model.pkl`.
-5. **Ứng dụng:** Chạy `inference.py` để bắt đầu nhận diện cử chỉ.
+5. **Ứng dụng:** Chạy `app.py` để bắt đầu nhận diện cử chỉ.
 
 ## 🛠️ Cài đặt
 
