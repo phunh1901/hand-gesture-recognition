@@ -49,7 +49,7 @@ def get_image():
       
         cv.imshow('Collecting Data', frame)
         
-        if cv.waitKey(1) == ord('q') or count >= 100:
+        if cv.waitKey(1) == ord('q') or count >= 300:
             break
   
     cap.release()
