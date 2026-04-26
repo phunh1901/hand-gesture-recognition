@@ -1,38 +1,38 @@
 import cv2 as cv
 import mediapipe as mp
 import numpy as np
-import pickle
 import joblib
+import time
+import pyautogui
+
+# ===== INIT =====
+pyautogui.FAILSAFE = False  # tránh crash khi di chuột vào góc màn hình
 
 mp_hands = mp.solutions.hands
 hands = mp_hands.Hands(
-    static_image_mode=False, 
-    max_num_hands=1, 
+    static_image_mode=False,
+    max_num_hands=1,
     min_detection_confidence=0.7,
-    min_tracking_confidence=0.5
+    min_tracking_confidence=0.7   # fix: đồng bộ với detection_confidence
 )
 
-THRESHOLD = 0.9
+THRESHOLD = 0.8
+HOLD_TIME = 2.0        # giữ 2 giây
+COOLDOWN = 2.0         # delay sau khi trigger
 
-svm = joblib.load('./models/svm_model.pkl')
-scaler = joblib.load('./models/scaler.pkl')
+current_gesture = None
+gesture_start_time = None
+last_trigger_time = 0
 
+# ===== LOAD MODEL =====
+with open('./models/hand_gesture_svm.pkl', 'rb') as f:
+    model_data = joblib.load(f)
 
-def calc_distance(p1, p2):
-    return np.linalg.norm(np.array(p1) - np.array(p2))
-
-def calc_angle(a, b, c):
-    a = np.array(a)
-    b = np.array(b)
-    c = np.array(c)
-
-    ba = a - b
-    bc = c - b
-
-    cos_angle = np.dot(ba, bc) / (np.linalg.norm(ba)*np.linalg.norm(bc) + 1e-6)
-    return np.arccos(np.clip(cos_angle, -1.0, 1.0))
+svm = model_data['model']
+scaler = model_data['scaler']
 
 
+# ===== FEATURE EXTRACT =====
 def extract_features(frame):
     img_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
     result = hands.process(img_rgb)
@@ -56,14 +56,26 @@ def extract_features(frame):
 
     features = []
 
+    # (x, y) coordinates
     for (x, y) in points:
         features.extend([x, y])
 
+    # distance giữa các fingertip
     fingertip_ids = [4, 8, 12, 16, 20]
     for i in range(len(fingertip_ids)):
-        for j in range(i+1, len(fingertip_ids)):
-            d = calc_distance(points[fingertip_ids[i]], points[fingertip_ids[j]])
-            features.append(d)
+        for j in range(i + 1, len(fingertip_ids)):
+            p1 = points[fingertip_ids[i]]
+            p2 = points[fingertip_ids[j]]
+            dist = np.linalg.norm(np.array(p1) - np.array(p2))
+            features.append(dist)
+
+    # angle tại cổ tay
+    def calc_angle(a, b, c):
+        a, b, c = np.array(a), np.array(b), np.array(c)
+        ba = a - b
+        bc = c - b
+        cos_angle = np.dot(ba, bc) / (np.linalg.norm(ba) * np.linalg.norm(bc) + 1e-6)
+        return np.arccos(np.clip(cos_angle, -1.0, 1.0))
 
     wrist = points[0]
     for tip in fingertip_ids:
@@ -73,6 +85,33 @@ def extract_features(frame):
     return np.array(features).reshape(1, -1)
 
 
+# ===== ACTION =====
+def trigger_action(gesture):
+    print(f"[ACTION TRIGGERED] {gesture}")
+
+    if gesture == "FULL_SCREEN":
+        pyautogui.press('f')
+
+    elif gesture == "MUTE":
+        pyautogui.press('m')
+
+    elif gesture == "PLAY_PAUSE":
+        pyautogui.press('space')
+
+    elif gesture == "SEEK_BW":
+        pyautogui.press('left')
+
+    elif gesture == "SEEK_FW":
+        pyautogui.press('right')
+
+    elif gesture == "VOL_DOWN":
+        pyautogui.press('down')
+
+    elif gesture == "VOL_UP":
+        pyautogui.press('up')
+
+
+# ===== MAIN =====
 cap = cv.VideoCapture(0)
 
 while cap.isOpened():
@@ -84,26 +123,73 @@ while cap.isOpened():
 
     features = extract_features(frame)
 
-    if features is not None:
-        features = scaler.transform(features)
+    label = "No Hand"
+    color = (0, 0, 255)
+    now = time.time()
 
-        probs = svm.predict_proba(features)
+    if features is not None:
+        features_scaled = scaler.transform(features)
+
+        probs = svm.predict_proba(features_scaled)
         max_prob = np.max(probs)
-        pred = svm.predict(features)[0]
 
         if max_prob >= THRESHOLD:
+            pred = svm.predict(features_scaled)[0]
             label = f"{pred} ({max_prob:.2f})"
             color = (0, 255, 0)
+
+            # ===== HOLD LOGIC =====
+            if pred == current_gesture:
+                if gesture_start_time is None:
+                    gesture_start_time = now
+
+                elapsed = now - gesture_start_time
+
+                # đủ thời gian giữ + hết cooldown
+                if elapsed >= HOLD_TIME and (now - last_trigger_time) > COOLDOWN:
+                    trigger_action(pred)
+                    last_trigger_time = now
+                    gesture_start_time = None  # reset để đếm lại
+            else:
+                # gesture mới → reset
+                current_gesture = pred
+                gesture_start_time = now
+
         else:
-            label = f"Unknown ({max_prob:.2f})"
-            color = (0, 0, 255)
+            # confidence thấp → reset
+            current_gesture = None
+            gesture_start_time = None
 
-        cv.putText(frame, label, (50, 100),
-                   cv.FONT_HERSHEY_SIMPLEX, 1, color, 2)
+    else:
+        # không phát hiện tay → reset
+        current_gesture = None
+        gesture_start_time = None
 
-    cv.imshow("Hand Gesture Recognition", frame)
+    # ===== UI =====
+    cv.putText(frame, label, (50, 100),
+               cv.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
-    if cv.waitKey(1) == ord('q'):
+    # Thanh tiến trình hold
+    if gesture_start_time is not None:
+        elapsed = now - gesture_start_time
+        hold_progress = min(int(elapsed / HOLD_TIME * 100), 100)  # fix: clamp tối đa 100%
+
+        cv.putText(frame, f"Holding: {hold_progress}%",
+                   (50, 150), cv.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+
+        # Vẽ thanh progress bar
+        bar_x, bar_y, bar_w, bar_h = 50, 170, 300, 20
+        filled_w = int(bar_w * hold_progress / 100)
+        cv.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (100, 100, 100), 2)
+        cv.rectangle(frame, (bar_x, bar_y), (bar_x + filled_w, bar_y + bar_h), (0, 255, 255), -1)
+
+    # Hướng dẫn
+    cv.putText(frame, "Press Q to quit", (50, frame.shape[0] - 20),
+               cv.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
+
+    cv.imshow("Gesture Control", frame)
+
+    if cv.waitKey(1) & 0xFF == ord('q'):
         break
 
 cap.release()
