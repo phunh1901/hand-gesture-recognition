@@ -13,16 +13,18 @@ hands = mp_hands.Hands(
     static_image_mode=False,
     max_num_hands=1,
     min_detection_confidence=0.7,
-    min_tracking_confidence=0.7   # fix: đồng bộ với detection_confidence
+    min_tracking_confidence=0.7  
 )
 
 THRESHOLD = 0.8
-HOLD_TIME = 2.0        # giữ 2 giây
-COOLDOWN = 2.0         # delay sau khi trigger
+HOLD_TIME = 2.0       
+COOLDOWN = 2.0     # delay sau khi trigger
 
 current_gesture = None
 gesture_start_time = None
 last_trigger_time = 0
+no_hand_counter = 0
+MAX_NO_HAND_FRAMES = 5
 
 # ===== LOAD MODEL =====
 with open('./models/hand_gesture_svm.pkl', 'rb') as f:
@@ -32,13 +34,35 @@ svm = model_data['model']
 scaler = model_data['scaler']
 
 
+# ===== UTILS =====
+def apply_clahe(img):
+    lab = cv.cvtColor(img, cv.COLOR_BGR2LAB)
+    l, a, b = cv.split(lab)
+    clahe = cv.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+    cl = clahe.apply(l)
+    limg = cv.merge((cl, a, b))
+    return cv.cvtColor(limg, cv.COLOR_LAB2BGR)
+
+
 # ===== FEATURE EXTRACT =====
 def extract_features(frame):
-    img_rgb = cv.cvtColor(frame, cv.COLOR_BGR2RGB)
+    # Tiền xử lý chống lóa sáng bằng CLAHE
+    processed_frame = apply_clahe(frame)
+    img_rgb = cv.cvtColor(processed_frame, cv.COLOR_BGR2RGB)
     result = hands.process(img_rgb)
 
     if not result.multi_hand_landmarks:
         return None
+
+    # Vẽ landmarks để trực quan hóa bàn tay lên webcam gốc
+    for hand_landmarks in result.multi_hand_landmarks:
+        mp.solutions.drawing_utils.draw_landmarks(
+            frame,
+            hand_landmarks,
+            mp_hands.HAND_CONNECTIONS,
+            mp.solutions.drawing_utils.DrawingSpec(color=(0, 255, 0), thickness=2, circle_radius=2), # Khớp xanh lá
+            mp.solutions.drawing_utils.DrawingSpec(color=(0, 0, 255), thickness=2) # Xương đỏ
+        )
 
     landmarks = result.multi_hand_landmarks[0].landmark
 
@@ -128,6 +152,7 @@ while cap.isOpened():
     now = time.time()
 
     if features is not None:
+        no_hand_counter = 0  # Reset bộ đếm mất dấu
         features_scaled = scaler.transform(features)
 
         probs = svm.predict_proba(features_scaled)
@@ -156,14 +181,24 @@ while cap.isOpened():
                 gesture_start_time = now
 
         else:
-            # confidence thấp → reset
+            # confidence thấp → reset ngay lập tức
             current_gesture = None
             gesture_start_time = None
 
     else:
-        # không phát hiện tay → reset
-        current_gesture = None
-        gesture_start_time = None
+        # Không phát hiện thấy tay (có thể do bị lóa hoặc che khuất tạm thời)
+        no_hand_counter += 1
+        if no_hand_counter >= MAX_NO_HAND_FRAMES:
+            # Thực sự mất dấu tay
+            current_gesture = None
+            gesture_start_time = None
+            label = "No Hand"
+            color = (0, 0, 255)
+        else:
+            # Tạm thời giữ lại trạng thái cũ để tránh giật lag khi demo (Persistence)
+            if current_gesture is not None:
+                label = f"{current_gesture} (Lost...)"
+                color = (0, 255, 255)  # Màu vàng cảnh báo đang cố hồi phục dấu tay
 
     # ===== UI =====
     cv.putText(frame, label, (50, 100),

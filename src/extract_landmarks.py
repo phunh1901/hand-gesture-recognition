@@ -11,7 +11,7 @@ hands = mp_hands.Hands(static_image_mode=True, max_num_hands=1)
 def calc_distance(p1, p2):
     return np.linalg.norm(np.array(p1) - np.array(p2))
 
-def calc_angle(a, b, c):
+def calc_angle(a, b, c): # 2 chiều
     a = np.array(a)
     b = np.array(b)
     c = np.array(c)
@@ -44,6 +44,7 @@ def image_processed(file_path):
     min_y, max_y = min(ys), max(ys)
 
     points = []
+    # Chuẩn hóa tọa độ
     for lm in landmarks:
         x = (lm.x - min_x) / (max_x - min_x + 1e-6)
         y = (lm.y - min_y) / (max_y - min_y + 1e-6)
